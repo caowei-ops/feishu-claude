@@ -4,15 +4,21 @@ import hashlib
 import hmac
 import time
 import base64
+import re
 from fastapi import FastAPI, Request, Response
 import httpx
 import anthropic
 from Crypto.Cipher import AES
+from openai import AsyncOpenAI
 
 app = FastAPI()
 claude = anthropic.Anthropic(
     api_key=os.environ.get("ANTHROPIC_API_KEY", os.environ.get("ANTHROPIC_AUTH_TOKEN")),
     base_url=os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
+)
+gpt = AsyncOpenAI(
+    api_key=os.environ.get("OPENAI_API_KEY", ""),
+    base_url=os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"),
 )
 
 APP_ID = os.environ["APP_ID"]
@@ -21,6 +27,7 @@ VERIFICATION_TOKEN = os.environ.get("APP_VERIFICATION_TOKEN", "")
 ENCRYPT_KEY = os.environ.get("APP_ENCRYPT_KEY", "")
 BOT_NAME = os.environ.get("BOT_NAME", "Claude")
 MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6")
+GPT_MODEL = os.environ.get("GPT_MODEL", "gpt-4o")
 
 # 简单内存存储对话历史，key = chat_id
 conversation_history: dict[str, list] = {}
@@ -63,6 +70,22 @@ async def send_message(chat_id: str, text: str, msg_type: str = "text"):
                 "content": json.dumps({"text": text}),
             },
         )
+
+
+async def get_gpt_reply(chat_id: str, user_text: str) -> str:
+    history = conversation_history.setdefault(f"gpt:{chat_id}", [])
+    history.append({"role": "user", "content": user_text})
+    if len(history) > 20:
+        history = history[-20:]
+        conversation_history[f"gpt:{chat_id}"] = history
+    response = await gpt.chat.completions.create(
+        model=GPT_MODEL,
+        messages=history,
+        max_tokens=2048,
+    )
+    reply = response.choices[0].message.content
+    history.append({"role": "assistant", "content": reply})
+    return reply
 
 
 def get_claude_reply(chat_id: str, user_text: str) -> str:
@@ -130,6 +153,13 @@ async def webhook_event(request: Request):
         return {"code": 0}
 
     chat_id = message.get("chat_id", "")
-    reply = get_claude_reply(chat_id, text)
+
+    # /gpt 指令走 GPT，其余走 Claude
+    if text.startswith("/gpt "):
+        query = text[5:].strip()
+        reply = await get_gpt_reply(chat_id, query)
+    else:
+        reply = get_claude_reply(chat_id, text)
+
     await send_message(chat_id, reply)
     return {"code": 0}
