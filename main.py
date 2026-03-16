@@ -3,9 +3,11 @@ import json
 import hashlib
 import hmac
 import time
+import base64
 from fastapi import FastAPI, Request, Response
 import httpx
 import anthropic
+from Crypto.Cipher import AES
 
 app = FastAPI()
 claude = anthropic.Anthropic(
@@ -24,6 +26,19 @@ MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-6")
 conversation_history: dict[str, list] = {}
 # 防重放，存已处理的 message_id
 processed_messages: set = set()
+
+
+def decrypt_feishu(encrypt_key: str, encrypted: str) -> dict:
+    """解密飞书加密消息"""
+    key = hashlib.sha256(encrypt_key.encode()).digest()
+    encrypted_bytes = base64.b64decode(encrypted)
+    iv = encrypted_bytes[:16]
+    cipher = AES.new(key, AES.MODE_CBC, iv)
+    decrypted = cipher.decrypt(encrypted_bytes[16:])
+    # 去掉 padding
+    pad = decrypted[-1]
+    decrypted = decrypted[:-pad]
+    return json.loads(decrypted)
 
 
 async def get_tenant_token() -> str:
@@ -77,6 +92,10 @@ def ping():
 @app.post("/webhook/event")
 async def webhook_event(request: Request):
     body = await request.json()
+
+    # 解密
+    if ENCRYPT_KEY and "encrypt" in body:
+        body = decrypt_feishu(ENCRYPT_KEY, body["encrypt"])
 
     # URL 验证
     if body.get("type") == "url_verification":
