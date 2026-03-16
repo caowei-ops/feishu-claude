@@ -8,7 +8,10 @@ import httpx
 import anthropic
 
 app = FastAPI()
-claude = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+claude = anthropic.Anthropic(
+    api_key=os.environ.get("ANTHROPIC_API_KEY", os.environ.get("ANTHROPIC_AUTH_TOKEN")),
+    base_url=os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
+)
 
 APP_ID = os.environ["APP_ID"]
 APP_SECRET = os.environ["APP_SECRET"]
